@@ -220,6 +220,39 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok", "time": time.time()}).encode("utf-8"))
+        elif self.path.startswith("/api/debug"):
+            # 调试端点 - 测试Yahoo API连接
+            qs = __import__("urllib.parse").parse_qs(__import__("urllib.parse").urlparse(self.path).query)
+            code = qs.get("code", ["000001.SS"])[0]
+            try:
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{code}?interval=1d&range=3mo"
+                req = urllib.request.Request(url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json'
+                })
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    raw = response.read().decode('utf-8')
+                    data = json.loads(raw)
+                    result = data.get('chart', {}).get('result')
+                    if result and result[0]:
+                        timestamps = result[0].get('timestamp', [])
+                        quotes = result[0].get('indicators', {}).get('quote', [{}])[0]
+                        debug_info = {
+                            "code": code,
+                            "status": "success",
+                            "timestamps_count": len(timestamps),
+                            "has_quotes": quotes is not None,
+                            "sample": timestamps[:2] if timestamps else []
+                        }
+                    else:
+                        debug_info = {"code": code, "status": "no_result", "raw": raw[:500]}
+                response = {"code": 0, "data": debug_info}
+            except Exception as e:
+                response = {"code": 1, "error": str(e), "type": type(e).__name__}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response, ensure_ascii=False).encode("utf-8"))
         else:
             self.send_error(404)
 
