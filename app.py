@@ -33,7 +33,7 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;backgr
 .bar span{flex:1;font-size:12px;color:#666}
 .bar button{padding:6px 16px;background:#2a5298;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer}
 .wrap{padding:10px;overflow-x:auto}
-table{width:100%;min-width:600px;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden}
+table{width:100%;min-width:680px;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden}
 th{background:#f8f9fa;font-size:11px;font-weight:600;color:#555;padding:10px 6px;text-align:center}
 td{font-size:11px;padding:8px 6px;text-align:center;border-bottom:1px solid #f0f0f0}
 .name{font-weight:500;color:#333;text-align:left!important;padding-left:12px!important}
@@ -48,8 +48,8 @@ td{font-size:11px;padding:8px 6px;text-align:center;border-bottom:1px solid #f0f
 <table><thead><tr>
 <th>指数</th><th>当前点位</th><th>30日最高</th><th>最高日期</th>
 <th>30日最低</th><th>最低日期</th><th>最低相对最高跌幅%</th><th>当前相对最低涨幅%</th>
-<th>趋势顶底中期线</th>
-</tr></thead><tbody id="tb"><tr><td colspan="9" class="load">加载中...</td></tr></tbody></table>
+<th>趋势顶底中期线</th><th>5分钟中期线</th>
+</tr></thead><tbody id="tb"><tr><td colspan="10" class="load">加载中...</td></tr></tbody></table>
 </div>
 <div id="eb" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 12px;margin:10px;font-size:11px;color:#856404"></div>
 <script>
@@ -62,7 +62,7 @@ function render(data) {
   var eb = document.getElementById('eb');
   
   if (!data || (!data.results && !data.errors)) {
-    tb.innerHTML = '<tr><td colspan="9" class="load" style="color:#e74c3c">数据异常</td></tr>';
+    tb.innerHTML = '<tr><td colspan="10" class="load" style="color:#e74c3c">数据异常</td></tr>';
   } else {
     var html = '';
     var items = data.results || [];
@@ -70,6 +70,8 @@ function render(data) {
       var x = items[i];
       var mv = x.ml !== null && x.ml !== undefined ? x.ml.toFixed(2) : '-';
       var mc = x.ml !== null && x.ml !== undefined ? (x.ml > 70 ? 'green' : x.ml < 30 ? 'red' : 'orange') : '';
+      var mv5 = x.ml5m !== null && x.ml5m !== undefined ? x.ml5m.toFixed(2) : '-';
+      var mc5 = x.ml5m !== null && x.ml5m !== undefined ? (x.ml5m > 70 ? 'green' : x.ml5m < 30 ? 'red' : 'orange') : '';
       html += '<tr><td class="name">' + x.n + '</td>' +
         '<td>' + x.current.toFixed(2) + '</td>' +
         '<td>' + x.highMax.toFixed(2) + '</td>' +
@@ -78,10 +80,11 @@ function render(data) {
         '<td>' + x.lowDate + '</td>' +
         '<td class="' + (x.drop < 0 ? 'red' : 'green') + '">' + x.drop.toFixed(2) + '</td>' +
         '<td class="' + (x.rise >= 0 ? 'green' : 'red') + '">' + x.rise.toFixed(2) + '</td>' +
-        '<td class="' + mc + '">' + mv + '</td></tr>';
+        '<td class="' + mc + '">' + mv + '</td>' +
+        '<td class="' + mc5 + '">' + mv5 + '</td></tr>';
     }
     if (html === '') {
-      tb.innerHTML = '<tr><td colspan="9" class="load" style="color:#e74c3c">全部失败</td></tr>';
+      tb.innerHTML = '<tr><td colspan="10" class="load" style="color:#e74c3c">全部失败</td></tr>';
     } else {
       tb.innerHTML = html;
     }
@@ -149,16 +152,24 @@ def medium_line(closes, highs, lows):
 _cache = {}
 _cache_time = 0
 _error_cache = {}
+_cache_5m = {}
+_cache_5m_time = 0
 
-def fetch_yahoo(code, name):
-    global _cache, _cache_time, _error_cache
+def fetch_yahoo(code, name, interval='1d', rng='3mo'):
+    global _cache, _cache_time, _error_cache, _cache_5m, _cache_5m_time
     now = time.time()
-    if code in _cache and (now - _cache_time) < 300:
-        return _cache[code], None
+    
+    cache = _cache_5m if interval == '5m' else _cache
+    cache_time = _cache_5m_time if interval == '5m' else _cache_time
+    
+    cache_key = code + '_' + interval
+    if code in cache and (now - cache[code][1]) < (120 if interval == '5m' else 300):
+        return cache[code][0], None
+    
     if code in _error_cache and (now - _error_cache[code][1]) < 300:
         return None, _error_cache[code][0]
     try:
-        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + code + "?interval=1d&range=3mo"
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + code + "?interval=" + interval + "&range=" + rng
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode('utf-8'))
@@ -177,24 +188,26 @@ def fetch_yahoo(code, name):
                 low = float(q['low'][i])
                 if close > 0 and high > 0 and low > 0:
                     rows.append({
-                        'date': datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d'),
+                        'date': datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d %H:%M'),
                         'close': round(close, 2),
                         'high': round(high, 2),
                         'low': round(low, 2)
                     })
             except (TypeError, ValueError):
                 continue
-        print(code + ": " + str(len(rows)) + " rows", flush=True)
-        _cache[code] = rows
-        _cache_time = now
+        print(code + " " + interval + ": " + str(len(rows)) + " rows", flush=True)
+        if interval == '5m':
+            _cache_5m[code] = (rows, now)
+        else:
+            _cache[code] = (rows, now)
         return rows, None
     except Exception as e:
         err = name + ": " + str(e)
         _error_cache[code] = (err, now)
-        print("Error " + code + ": " + str(e), flush=True)
+        print("Error " + code + " " + interval + ": " + str(e), flush=True)
         return None, err
 
-def analyze(rows, name):
+def analyze(rows, name, rows_5m=None):
     if not rows or len(rows) < 30:
         return None
     last30 = rows[-30:]
@@ -207,6 +220,14 @@ def analyze(rows, name):
     highs = [r['high'] for r in rows]
     lows = [r['low'] for r in rows]
     ml_val = medium_line(closes, highs, lows)
+    
+    ml_5m = None
+    if rows_5m and len(rows_5m) >= 34:
+        c5 = [r['close'] for r in rows_5m]
+        h5 = [r['high'] for r in rows_5m]
+        l5 = [r['low'] for r in rows_5m]
+        ml_5m = medium_line(c5, h5, l5)
+    
     return {
         'n': name,
         'current': round(c, 2),
@@ -216,7 +237,8 @@ def analyze(rows, name):
         'lowDate': lowDate,
         'drop': round((lm - hm) / hm * 100, 2),
         'rise': round((c - lm) / lm * 100, 2),
-        'ml': ml_val
+        'ml': ml_val,
+        'ml5m': ml_5m
     }
 
 class Handler(BaseHTTPRequestHandler):
@@ -232,19 +254,23 @@ class Handler(BaseHTTPRequestHandler):
             errors = []
             for name, codes in INDICES:
                 rows = None
+                rows_5m = None
                 err = None
                 for code in codes:
                     try:
-                        r, e = fetch_yahoo(code, name)
+                        r, e = fetch_yahoo(code, name, '1d', '3mo')
                         if r and len(r) >= 30:
                             rows = r
+                            r5, e5 = fetch_yahoo(code, name, '5m', '5d')
+                            if r5 and len(r5) >= 34:
+                                rows_5m = r5
                             break
                         else:
                             err = e if e else (name + ': ' + code + '数据不足')
                     except Exception as ex:
                         err = name + ': ' + str(ex)
                 if rows:
-                    a = analyze(rows, name)
+                    a = analyze(rows, name, rows_5m)
                     if a:
                         results.append(a)
                     else:
