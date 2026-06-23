@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Render.com 部署 - 直接使用东方财富API获取中国指数数据
+Render.com 部署 - 使用 Yahoo Finance API 获取中国指数数据
 """
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
@@ -11,15 +11,16 @@ import urllib.error
 
 PORT = int(__import__("os").environ.get("PORT", 8000))
 
+# Yahoo Finance 指数代码映射
 INDICES = [
-    ("上证指数", "000001"),
-    ("深证成指", "399001"),
-    ("创业板指", "399006"),
-    ("沪深300", "000300"),
-    ("中证1000", "000852"),
-    ("中证500", "000905"),
-    ("上证50", "000016"),
-    ("科创50", "000688"),
+    ("上证指数", "000001.SS"),
+    ("深证成指", "399001.SZ"),
+    ("创业板指", "399006.SZ"),
+    ("沪深300", "000300.SS"),
+    ("中证1000", "000852.SS"),
+    ("中证500", "000905.SS"),
+    ("上证50", "000016.SS"),
+    ("科创50", "000688.SS"),
 ]
 
 def ema(values, period):
@@ -49,8 +50,8 @@ _cache = {}
 _cache_time = 0
 CACHE_DURATION = 300
 
-def fetch_from_eastmoney(code):
-    """直接使用东方财富API获取指数数据"""
+def fetch_from_yahoo(code):
+    """使用 Yahoo Finance API 获取指数数据"""
     global _cache, _cache_time
     
     now = time.time()
@@ -58,33 +59,39 @@ def fetch_from_eastmoney(code):
         return _cache[code]
     
     try:
-        # 东方财富API - 日K线数据
-        url = f"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.{code}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=120"
+        # Yahoo Finance API
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{code}?interval=1d&range=3mo"
         
         req = urllib.request.Request(url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Referer': 'http://quote.eastmoney.com/'
+            'Accept': 'application/json'
         })
         
         with urllib.request.urlopen(req, timeout=15) as response:
             data = json.loads(response.read().decode('utf-8'))
         
-        if data.get('data') is None or data['data'].get('klines') is None:
+        result = data.get('chart', {}).get('result')
+        if not result or result[0] is None:
             _cache[code] = None
             _cache_time = now
             return None
         
-        klines = data['data']['klines']
+        meta = result[0]['meta']
+        timestamps = result[0]['timestamp']
+        quotes = result[0]['indicators']['quote'][0]
+        
         rows = []
-        for kline in klines:
-            parts = kline.split(',')
-            # parts: [日期, 开, 收, 高, 低, 成交量, ...]
+        for i, ts in enumerate(timestamps):
+            dt = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
             rows.append({
-                "date": parts[0],
-                "close": round(float(parts[2]), 2),
-                "high": round(float(parts[3]), 2),
-                "low": round(float(parts[4]), 2),
+                "date": dt,
+                "close": round(float(quotes['close'][i]), 2),
+                "high": round(float(quotes['high'][i]), 2),
+                "low": round(float(quotes['low'][i]), 2),
             })
+        
+        # 过滤无效数据
+        rows = [r for r in rows if r['close'] is not None and r['close'] > 0]
         
         _cache[code] = rows
         _cache_time = now
@@ -177,9 +184,9 @@ tr:nth-child(odd) td{background:#fafafa}
 </table>
 </div>
 <div id="eb" style="display:none"></div>
-<div class="footer">数据来源: 东方财富建议横屏查看 &middot; 数据仅供参考</div>
+<div class="footer">数据来源: Yahoo Finance建议横屏查看 &middot; 数据仅供参考</div>
 <script>
-const INDICES=[{name:'上证指数',code:'000001'},{name:'深证成指',code:'399001'},{name:'创业板指',code:'399006'},{name:'沪深300',code:'000300'},{name:'中证1000',code:'000852'},{name:'中证500',code:'000905'},{name:'上证50',code:'000016'},{name:'科创50',code:'000688'}];
+const INDICES=[{name:'上证指数',code:'000001.SS'},{name:'深证成指',code:'399001.SZ'},{name:'创业板指',code:'399006.SZ'},{name:'沪深300',code:'000300.SS'},{name:'中证1000',code:'000852.SS'},{name:'中证500',code:'000905.SS'},{name:'上证50',code:'000016.SS'},{name:'科创50',code:'000688.SS'}];
 function ema(a,n){if(a.length<n)return null;let k=2/(n+1),e=a.slice(0,n).reduce((x,y)=>x+y,0)/n;for(let i=n;i<a.length;i++)e=a[i]*k+e*(1-k);return e}
 function ml(r){if(r.length<34)return null;let cp=r.map(x=>x.c),hp=r.map(x=>x.h),lp=r.map(x=>x.l),s=[];for(let i=0;i<r.length;i++){let st=Math.max(0,i-33),h34=Math.max.apply(null,hp.slice(st,i+1)),l34=Math.min.apply(null,lp.slice(st,i+1));s.push(h34===l34?0:-100*(h34-cp[i])/(h34-l34))}let e=ema(s,4);return e!==null?Math.round((e+100)*100)/100:null}
 function an(r,n){if(!r||r.length<30)return{name:n,error:'数据不足'};let l=r.slice(-30),hm=Math.max.apply(null,l.map(x=>x.h)),lm=Math.min.apply(null,l.map(x=>x.l)),c=r[r.length-1].c;return{name:n,current:Math.round(c*100)/100,highMax:Math.round(hm*100)/100,highDate:l.reduce((p,x)=>x.h>p.h?x:p).d,lowMin:Math.round(lm*100)/100,lowDate:l.reduce((p,x)=>x.l<p.l?x:p).d,drop:Math.round((lm-hm)/hm*10000)/100,rise:Math.round((c-lm)/lm*10000)/100,ml:ml(r)}}
@@ -200,7 +207,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/kline"):
             qs = __import__("urllib.parse").parse_qs(__import__("urllib.parse").urlparse(self.path).query)
             code = qs.get("code", [""])[0]
-            rows = fetch_akshare(code) if code else None
+            rows = fetch_from_yahoo(code) if code else None
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-cache")
