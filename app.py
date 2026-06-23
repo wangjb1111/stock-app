@@ -1,25 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-Render.com 部署 - 使用标准库 urllib 直接请求 Yahoo Finance (无需第三方库)
+Render.com 部署 - 使用 Stooq 数据源 (全球可访问)
 """
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import time
 import urllib.request
-import urllib.parse
-import re
 
 PORT = int(__import__("os").environ.get("PORT", 8000))
 
 INDICES = [
-    ("上证指数", "000001.SS"),
-    ("深证成指", "399001.SZ"),
-    ("创业板指", "399006.SZ"),
-    ("沪深300", "000300.SS"),
-    ("中证1000", "000852.SS"),
-    ("中证500", "000905.SS"),
-    ("上证50", "000016.SS"),
-    ("科创50", "000688.SS"),
+    ("上证指数", "sh000001"),
+    ("深证成指", "sz399001"),
+    ("创业板指", "sz399006"),
+    ("沪深300", "sh000300"),
+    ("中证1000", "sh000852"),
+    ("中证500", "sh000905"),
+    ("上证50", "sh000016"),
+    ("科创50", "sh000688"),
 ]
 
 def ema(values, period):
@@ -45,66 +43,61 @@ def medium_line(closes, highs, lows):
     e = ema(series, 4)
     return round(e + 100, 2) if e is not None else None
 
-# 缓存
 _cache = {}
 _cache_time = 0
 CACHE_DURATION = 300
 
-def fetch_yahoo(ticker):
-    """使用 urllib 直接请求 Yahoo Finance"""
+def fetch_stooq(code):
+    """使用 Stooq 获取数据"""
     global _cache, _cache_time
     
     now = time.time()
-    if ticker in _cache and (now - _cache_time) < CACHE_DURATION:
-        return _cache[ticker]
+    if code in _cache and (now - _cache_time) < CACHE_DURATION:
+        return _cache[code]
     
     try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=6mo&interval=1d&events=div,split"
+        # Stooq API - 简洁的数据格式
+        url = f"https://stooq.com/q/l/?s={code}&i=d&l=120"
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Origin": "https://finance.yahoo.com",
-            "Referer": "https://finance.yahoo.com/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml",
         }
         req = urllib.request.Request(url, headers=headers)
         
-        with urllib.request.urlopen(req, timeout=20) as response:
-            data = json.loads(response.read().decode('utf-8'))
+        with urllib.request.urlopen(req, timeout=30) as response:
+            html = response.read().decode('utf-8', errors='ignore')
         
-        result = data.get("chart", {}).get("result", [])
-        if not result:
-            _cache[ticker] = None
-            _cache_time = now
-            return None
-        
-        r = result[0]
-        timestamps = r.get("timestamp", [])
-        quote = r.get("indicators", {}).get("quote", [{}])[0]
-        
-        closes = quote.get("close", [])
-        highs = quote.get("high", [])
-        lows = quote.get("low", [])
-        
+        # 解析 HTML 表格
         rows = []
-        for i, ts in enumerate(timestamps):
-            if closes[i] is not None and closes[i] > 0:
-                import datetime
-                date_str = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
-                rows.append({
-                    "date": date_str,
-                    "close": round(closes[i], 2),
-                    "high": round(highs[i] if highs[i] else closes[i], 2),
-                    "low": round(lows[i] if lows[i] else closes[i], 2),
-                })
+        lines = html.strip().split('\n')
+        for line in lines[1:]:  # 跳过标题行
+            parts = line.split(',')
+            if len(parts) >= 6:
+                try:
+                    date = parts[0].strip()
+                    open_price = float(parts[1])
+                    high = float(parts[2])
+                    low = float(parts[3])
+                    close = float(parts[4])
+                    volume = float(parts[5]) if len(parts) > 5 else 0
+                    if close > 0:
+                        rows.append({
+                            "date": date,
+                            "close": close,
+                            "high": high,
+                            "low": low,
+                        })
+                except (ValueError, IndexError):
+                    continue
         
-        _cache[ticker] = rows
+        rows.reverse()  # 从旧到新
+        _cache[code] = rows
         _cache_time = now
         return rows
         
     except Exception as e:
-        print(f"Error fetching {ticker}: {e}", flush=True)
-        _cache[ticker] = None
+        print(f"Error fetching {code}: {e}", flush=True)
+        _cache[code] = None
         _cache_time = now
         return None
 
@@ -189,9 +182,9 @@ tr:nth-child(odd) td{background:#fafafa}
 </table>
 </div>
 <div id="eb" style="display:none"></div>
-<div class="footer">数据来源: Yahoo Finance<br>建议横屏查看 &middot; 数据仅供参考</div>
+<div class="footer">数据来源: Stooq<br>建议横屏查看 &middot; 数据仅供参考</div>
 <script>
-const INDICES=[{name:'上证指数',code:'000001.SS'},{name:'深证成指',code:'399001.SZ'},{name:'创业板指',code:'399006.SZ'},{name:'沪深300',code:'000300.SS'},{name:'中证1000',code:'000852.SS'},{name:'中证500',code:'000905.SS'},{name:'上证50',code:'000016.SS'},{name:'科创50',code:'000688.SS'}];
+const INDICES=[{name:'上证指数',code:'sh000001'},{name:'深证成指',code:'sz399001'},{name:'创业板指',code:'sz399006'},{name:'沪深300',code:'sh000300'},{name:'中证1000',code:'sh000852'},{name:'中证500',code:'sh000905'},{name:'上证50',code:'sh000016'},{name:'科创50',code:'sh000688'}];
 function ema(a,n){if(a.length<n)return null;let k=2/(n+1),e=a.slice(0,n).reduce((x,y)=>x+y,0)/n;for(let i=n;i<a.length;i++)e=a[i]*k+e*(1-k);return e}
 function ml(r){if(r.length<34)return null;let cp=r.map(x=>x.c),hp=r.map(x=>x.h),lp=r.map(x=>x.l),s=[];for(let i=0;i<r.length;i++){let st=Math.max(0,i-33),h34=Math.max.apply(null,hp.slice(st,i+1)),l34=Math.min.apply(null,lp.slice(st,i+1));s.push(h34===l34?0:-100*(h34-cp[i])/(h34-l34))}let e=ema(s,4);return e!==null?Math.round((e+100)*100)/100:null}
 function an(r,n){if(!r||r.length<30)return{name:n,error:'数据不足'};let l=r.slice(-30),hm=Math.max.apply(null,l.map(x=>x.h)),lm=Math.min.apply(null,l.map(x=>x.l)),c=r[r.length-1].c;return{name:n,current:Math.round(c*100)/100,highMax:Math.round(hm*100)/100,highDate:l.reduce((p,x)=>x.h>p.h?x:p).d,lowMin:Math.round(lm*100)/100,lowDate:l.reduce((p,x)=>x.l<p.l?x:p).d,drop:Math.round((lm-hm)/hm*10000)/100,rise:Math.round((c-lm)/lm*10000)/100,ml:ml(r)}}
@@ -212,7 +205,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/kline"):
             qs = __import__("urllib.parse").parse_qs(__import__("urllib.parse").urlparse(self.path).query)
             code = qs.get("code", [""])[0]
-            rows = fetch_yahoo(code) if code else None
+            rows = fetch_stooq(code) if code else None
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-cache")
@@ -221,7 +214,6 @@ class Handler(BaseHTTPRequestHandler):
             response = {"code": 0 if rows else 1, "data": rows, "error": None if rows else "获取失败"}
             self.wfile.write(json.dumps(response).encode("utf-8"))
         elif self.path == "/api/test":
-            # 测试端点
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
