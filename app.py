@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Render.com 部署 - 使用 yfinance 库 (增强版，修复 JSON 问题)
+Render.com 部署 - 使用标准库 urllib 直接请求 Yahoo Finance (无需第三方库)
 """
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import time
-import sys
+import urllib.request
+import urllib.parse
+import re
 
 PORT = int(__import__("os").environ.get("PORT", 8000))
 
@@ -43,42 +45,67 @@ def medium_line(closes, highs, lows):
     e = ema(series, 4)
     return round(e + 100, 2) if e is not None else None
 
-# 缓存数据，避免每次请求都获取
+# 缓存
 _cache = {}
 _cache_time = 0
-CACHE_DURATION = 300  # 5分钟缓存
+CACHE_DURATION = 300
 
-def fetch_data(ticker):
-    """使用 yfinance 获取数据"""
+def fetch_yahoo(ticker):
+    """使用 urllib 直接请求 Yahoo Finance"""
     global _cache, _cache_time
     
-    # 检查缓存
     now = time.time()
     if ticker in _cache and (now - _cache_time) < CACHE_DURATION:
         return _cache[ticker]
     
     try:
-        import yfinance as yf
-        stock = yf.Ticker(ticker)
-        df = stock.history(period="6mo", auto_adjust=True, timeout=10)
-        if df is None or df.empty:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=6mo&interval=1d&events=div,split"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Origin": "https://finance.yahoo.com",
+            "Referer": "https://finance.yahoo.com/",
+        }
+        req = urllib.request.Request(url, headers=headers)
+        
+        with urllib.request.urlopen(req, timeout=20) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        
+        result = data.get("chart", {}).get("result", [])
+        if not result:
             _cache[ticker] = None
             _cache_time = now
             return None
+        
+        r = result[0]
+        timestamps = r.get("timestamp", [])
+        quote = r.get("indicators", {}).get("quote", [{}])[0]
+        
+        closes = quote.get("close", [])
+        highs = quote.get("high", [])
+        lows = quote.get("low", [])
+        
         rows = []
-        for date, row in df.iterrows():
-            rows.append({
-                "date": str(date.date()),
-                "close": round(float(row["Close"]), 2),
-                "high": round(float(row["High"]), 2),
-                "low": round(float(row["Low"]), 2),
-            })
+        for i, ts in enumerate(timestamps):
+            if closes[i] is not None and closes[i] > 0:
+                import datetime
+                date_str = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+                rows.append({
+                    "date": date_str,
+                    "close": round(closes[i], 2),
+                    "high": round(highs[i] if highs[i] else closes[i], 2),
+                    "low": round(lows[i] if lows[i] else closes[i], 2),
+                })
+        
         _cache[ticker] = rows
         _cache_time = now
         return rows
+        
     except Exception as e:
         print(f"Error fetching {ticker}: {e}", flush=True)
         _cache[ticker] = None
+        _cache_time = now
         return None
 
 def analyze(rows, name):
@@ -95,7 +122,7 @@ def analyze(rows, name):
     closes = [r["close"] for r in rows]
     highs = [r["high"] for r in rows]
     lows = [r["low"] for r in rows]
-    ml = medium_line(closes, highs, lows)
+    ml_val = medium_line(closes, highs, lows)
     return {
         "name": name,
         "current": round(current, 2),
@@ -105,7 +132,7 @@ def analyze(rows, name):
         "low_date": low_date,
         "drop_from_high": drop_from_high,
         "rise_from_low": rise_from_low,
-        "medium_line": ml,
+        "medium_line": ml_val,
     }
 
 HTML = """<!DOCTYPE html>
@@ -168,7 +195,7 @@ const INDICES=[{name:'上证指数',code:'000001.SS'},{name:'深证成指',code:
 function ema(a,n){if(a.length<n)return null;let k=2/(n+1),e=a.slice(0,n).reduce((x,y)=>x+y,0)/n;for(let i=n;i<a.length;i++)e=a[i]*k+e*(1-k);return e}
 function ml(r){if(r.length<34)return null;let cp=r.map(x=>x.c),hp=r.map(x=>x.h),lp=r.map(x=>x.l),s=[];for(let i=0;i<r.length;i++){let st=Math.max(0,i-33),h34=Math.max.apply(null,hp.slice(st,i+1)),l34=Math.min.apply(null,lp.slice(st,i+1));s.push(h34===l34?0:-100*(h34-cp[i])/(h34-l34))}let e=ema(s,4);return e!==null?Math.round((e+100)*100)/100:null}
 function an(r,n){if(!r||r.length<30)return{name:n,error:'数据不足'};let l=r.slice(-30),hm=Math.max.apply(null,l.map(x=>x.h)),lm=Math.min.apply(null,l.map(x=>x.l)),c=r[r.length-1].c;return{name:n,current:Math.round(c*100)/100,highMax:Math.round(hm*100)/100,highDate:l.reduce((p,x)=>x.h>p.h?x:p).d,lowMin:Math.round(lm*100)/100,lowDate:l.reduce((p,x)=>x.l<p.l?x:p).d,drop:Math.round((lm-hm)/hm*10000)/100,rise:Math.round((c-lm)/lm*10000)/100,ml:ml(r)}}
-async function load(){var b=document.getElementById('rb'),s=document.getElementById('st'),tb=document.getElementById('tb'),eb=document.getElementById('eb');b.disabled=true;b.textContent='加载中';s.textContent='正在获取数据...';eb.style.display='none';var rs=[],er=[];await Promise.all(INDICES.map((idx,i)=>new Promise(rv=>setTimeout(async()=>{try{const res=await fetch('/api/kline?code='+encodeURIComponent(idx.code));const text=await res.text();if(!text||text.trim()===''){er.push(idx.name+':空响应');rv();return}const d=JSON.parse(text);if(d&&d.data&&d.data.length>0){const rows=d.data.map(x=>({d:x.date,c:x.close,h:x.high,l:x.low}));rs.push(an(rows,idx.name))}else{er.push(idx.name+':'+d.error)}}catch(e){er.push(idx.name+':'+e.message)}s.textContent='已加载'+(rs.length+er.length)+'/'+INDICES.length+'个';rv()},i*500))));if(rs.length===0){tb.innerHTML='<tr><td colspan="9" class="load" style="color:#e74c3c">全部失败:'+er.join(';')+'</td></tr>'}else{tb.innerHTML=rs.map(x=>{var mv=x.ml!==null?x.ml.toFixed(2):'-',mc=x.ml!==null?(x.ml>70?'green':x.ml<30?'red':'orange'):'';return'<tr><td class="name">'+x.name+'</td><td>'+x.current.toFixed(2)+'</td><td>'+x.highMax.toFixed(2)+'</td><td>'+x.highDate+'</td><td>'+x.lowMin.toFixed(2)+'</td><td>'+x.lowDate+'</td><td class="'+(x.drop<0?'red':'green')+'">'+x.drop.toFixed(2)+'</td><td class="'+(x.rise>=0?'green':'red')+'">'+x.rise.toFixed(2)+'</td><td class="'+mc+'">'+mv+'</td></tr>'}).join('');document.getElementById('ut').textContent='更新时间:'+new Date().toLocaleString('zh-CN')}if(er.length>0){eb.style.display='block';eb.className='err-box';eb.textContent='部分失败:'+er.join(';')}b.disabled=false;b.textContent='刷新';s.textContent='加载完成'}
+async function load(){var b=document.getElementById('rb'),s=document.getElementById('st'),tb=document.getElementById('tb'),eb=document.getElementById('eb');b.disabled=true;b.textContent='加载中';s.textContent='正在获取数据...';eb.style.display='none';var rs=[],er=[];await Promise.all(INDICES.map((idx,i)=>new Promise(rv=>setTimeout(async()=>{try{const res=await fetch('/api/kline?code='+encodeURIComponent(idx.code));const text=await res.text();if(!text||text.trim()===''){er.push(idx.name+':空响应');rv();return}const d=JSON.parse(text);if(d&&d.data&&d.data.length>0){const rows=d.data.map(x=>({d:x.date,c:x.close,h:x.high,l:x.low}));rs.push(an(rows,idx.name))}else{er.push(idx.name+':'+(d.error||'无数据'))}}catch(e){er.push(idx.name+':'+e.message)}s.textContent='已加载'+(rs.length+er.length)+'/'+INDICES.length+'个';rv()},i*1000))));if(rs.length===0){tb.innerHTML='<tr><td colspan="9" class="load" style="color:#e74c3c">全部失败:'+er.join(';')+'</td></tr>'}else{tb.innerHTML=rs.map(x=>{var mv=x.ml!==null?x.ml.toFixed(2):'-',mc=x.ml!==null?(x.ml>70?'green':x.ml<30?'red':'orange'):'';return'<tr><td class="name">'+x.name+'</td><td>'+x.current.toFixed(2)+'</td><td>'+x.highMax.toFixed(2)+'</td><td>'+x.highDate+'</td><td>'+x.lowMin.toFixed(2)+'</td><td>'+x.lowDate+'</td><td class="'+(x.drop<0?'red':'green')+'">'+x.drop.toFixed(2)+'</td><td class="'+(x.rise>=0?'green':'red')+'">'+x.rise.toFixed(2)+'</td><td class="'+mc+'">'+mv+'</td></tr>'}).join('');document.getElementById('ut').textContent='更新时间:'+new Date().toLocaleString('zh-CN')}if(er.length>0){eb.style.display='block';eb.className='err-box';eb.textContent='部分失败:'+er.join(';')}b.disabled=false;b.textContent='刷新';s.textContent='加载完成'}
 load();
 </script>
 </body>
@@ -185,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/kline"):
             qs = __import__("urllib.parse").parse_qs(__import__("urllib.parse").urlparse(self.path).query)
             code = qs.get("code", [""])[0]
-            rows = fetch_data(code) if code else None
+            rows = fetch_yahoo(code) if code else None
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-cache")
@@ -193,6 +220,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             response = {"code": 0 if rows else 1, "data": rows, "error": None if rows else "获取失败"}
             self.wfile.write(json.dumps(response).encode("utf-8"))
+        elif self.path == "/api/test":
+            # 测试端点
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok", "time": time.time()}).encode("utf-8"))
         else:
             self.send_error(404)
 
