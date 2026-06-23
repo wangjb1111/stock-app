@@ -123,6 +123,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+        elif self.path.startswith("/api/debug"):
+            # 调试端点 - 测试Yahoo API
+            code = self.path.split("code=")[1].split("&")[0] if "code=" in self.path else "000001.SS"
+            try:
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{code}?interval=1d&range=3mo"
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    raw = resp.read().decode('utf-8')
+                result = json.loads(raw).get('chart', {}).get('result')
+                if result and result[0]:
+                    ts = result[0].get('timestamp', [])
+                    debug = {"status": "ok", "code": code, "records": len(ts)}
+                else:
+                    debug = {"status": "no_data", "code": code}
+            except Exception as e:
+                debug = {"status": "error", "code": code, "msg": str(e)}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(debug).encode("utf-8"))
         else:
             self.send_error(404)
     def log_message(self, format, *args): pass
