@@ -41,11 +41,140 @@ td{font-size:11px;padding:8px 6px;text-align:center;border-bottom:1px solid #f0f
 </tr></thead><tbody id="tb"><tr><td colspan="9" class="load">加载中...</td></tr></tbody></table>
 </div>
 <script>
-const INDICES=[{n:'上证指数',c:'000001.SS'},{n:'深证成指',c:'399001.SZ'},{n:'创业板指',c:'399006.SZ'},{n:'沪深300',c:'000300.SS'},{n:'中证1000',c:'000852.SS'},{n:'中证500',c:'000905.SS'},{n:'上证50',c:'000016.SS'},{n:'科创50',c:'000688.SS'}];
-function ema(a,n){if(a.length<n)return null;let k=2/(n+1),e=a.slice(0,n).reduce((x,y)=>x+y,0)/n;for(let i=n;i<a.length;i++)e=a[i]*k+e*(1-k);return e}
-function ml(r){if(r.length<34)return null;let cp=r.map(x=>x.c),hp=r.map(x=>x.h),lp=r.map(x=>x.l),s=[];for(let i=0;i<r.length;i++){let st=Math.max(0,i-33),h34=Math.max.apply(null,hp.slice(st,i+1)),l34=Math.min.apply(null,lp.slice(st,i+1));s.push(h34===l34?0:-100*(h34-cp[i])/(h34-l34))}let e=ema(s,4);return e!==null?Math.round((e+100)*100)/100:null}
-function an(r,n){if(!r||r.length<30)return{n,er:'数据不足'};let l=r.slice(-30),hm=Math.max.apply(null,l.map(x=>x.h)),lm=Math.min.apply(null,l.map(x=>x.l)),c=r[r.length-1].c;return{n,current:Math.round(c*100)/100,highMax:Math.round(hm*100)/100,highDate:l.reduce((p,x)=>x.h>p.h?x:p).d,lowMin:Math.round(lm*100)/100,lowDate:l.reduce((p,x)=>x.l<p.l?x:p).d,drop:Math.round((lm-hm)/hm*10000)/100,rise:Math.round((c-lm)/lm*10000)/100,ml:ml(r)}}
-async function load(){var b=document.querySelector('button'),s=document.getElementById('st'),tb=document.getElementById('tb');b.disabled=true;b.textContent='加载中';s.textContent='获取中...';var rs=[],er=[];await Promise.all(INDICES.map((idx,i)=>new Promise(rv=>setTimeout(async()=>{try{const r=await fetch('/api/kline?code='+encodeURIComponent(idx.c));const t=await r.text();if(!t||t.trim()===''){er.push(idx.n+':空');rv()}const d=JSON.parse(t);if(d&&d.data&&d.data.length>0){const rows=d.data.map(x=>({d:x.date,c:x.close,h:x.high,l:x.low}));rs.push(an(rows,idx.n))}else{er.push(idx.n+':无')}}catch(e){er.push(idx.n+':'+e.message)}s.textContent=(rs.length+er.length)+'/'+INDICES.length;rv()},i*2000))));if(rs.length===0){tb.innerHTML='<tr><td colspan="9" class="load" style="color:#e74c3c">失败:'+er.join(';')+'</td></tr>'}else{tb.innerHTML=rs.map(x=>{var mv=x.ml!==null?x.ml.toFixed(2):'-',mc=x.ml!==null?(x.ml>70?'green':x.ml<30?'red':'orange'):'';return'<tr><td class="name">'+x.n+'</td><td>'+x.current.toFixed(2)+'</td><td>'+x.highMax.toFixed(2)+'</td><td>'+x.highDate+'</td><td>'+x.lowMin.toFixed(2)+'</td><td>'+x.lowDate+'</td><td class="'+(x.drop<0?'red':'green')+'">'+x.drop.toFixed(2)+'</td><td class="'+(x.rise>=0?'green':'red')+'">'+x.rise.toFixed(2)+'</td><td class="'+mc+'">'+mv+'</td></tr>'}).join('')}b.disabled=false;b.textContent='刷新';s.textContent='完成'}
+var INDICES=[
+  {n:'上证指数',c:'000001.SS'},
+  {n:'深证成指',c:'399001.SZ'},
+  {n:'创业板指',c:'399006.SZ'},
+  {n:'沪深300',c:'000300.SS'},
+  {n:'中证1000',c:'000852.SS'},
+  {n:'中证500',c:'000905.SS'},
+  {n:'上证50',c:'000016.SS'},
+  {n:'科创50',c:'000688.SS'}
+];
+
+function ema(arr, n) {
+  if (arr.length < n) return null;
+  var k = 2 / (n + 1);
+  var e = arr.slice(0, n).reduce(function(a, b) { return a + b; }, 0) / n;
+  for (var i = n; i < arr.length; i++) e = arr[i] * k + e * (1 - k);
+  return e;
+}
+
+function ml(rows) {
+  if (rows.length < 34) return null;
+  var cp = rows.map(function(r) { return r.c; });
+  var hp = rows.map(function(r) { return r.h; });
+  var lp = rows.map(function(r) { return r.l; });
+  var s = [];
+  for (var i = 0; i < rows.length; i++) {
+    var st = Math.max(0, i - 33);
+    var h34 = Math.max.apply(null, hp.slice(st, i + 1));
+    var l34 = Math.min.apply(null, lp.slice(st, i + 1));
+    s.push(h34 === l34 ? 0 : -100 * (h34 - cp[i]) / (h34 - l34));
+  }
+  var e = ema(s, 4);
+  return e !== null ? Math.round((e + 100) * 100) / 100 : null;
+}
+
+function analyze(rows, name) {
+  if (!rows || rows.length < 30) return {n: name, er: '数据不足'};
+  var last30 = rows.slice(-30);
+  var hm = Math.max.apply(null, last30.map(function(r) { return r.h; }));
+  var lm = Math.min.apply(null, last30.map(function(r) { return r.l; }));
+  var c = rows[rows.length - 1].c;
+  var highDate = last30.reduce(function(p, x) { return x.h > p.h ? x : p; }).d;
+  var lowDate = last30.reduce(function(p, x) { return x.l < p.l ? x : p; }).d;
+  return {
+    n: name,
+    current: Math.round(c * 100) / 100,
+    highMax: Math.round(hm * 100) / 100,
+    highDate: highDate,
+    lowMin: Math.round(lm * 100) / 100,
+    lowDate: lowDate,
+    drop: Math.round((lm - hm) / hm * 10000) / 100,
+    rise: Math.round((c - lm) / lm * 10000) / 100,
+    ml: ml(rows)
+  };
+}
+
+function render(results, errors) {
+  var tb = document.getElementById('tb');
+  var st = document.getElementById('st');
+  var btn = document.querySelector('button');
+  
+  if (results.length === 0) {
+    tb.innerHTML = '<tr><td colspan="9" class="load" style="color:#e74c3c">失败: ' + errors.join('; ') + '</td></tr>';
+  } else {
+    var html = '';
+    for (var i = 0; i < results.length; i++) {
+      var x = results[i];
+      var mv = x.ml !== null ? x.ml.toFixed(2) : '-';
+      var mc = x.ml !== null ? (x.ml > 70 ? 'green' : x.ml < 30 ? 'red' : 'orange') : '';
+      html += '<tr><td class="name">' + x.n + '</td>' +
+        '<td>' + x.current.toFixed(2) + '</td>' +
+        '<td>' + x.highMax.toFixed(2) + '</td>' +
+        '<td>' + x.highDate + '</td>' +
+        '<td>' + x.lowMin.toFixed(2) + '</td>' +
+        '<td>' + x.lowDate + '</td>' +
+        '<td class="' + (x.drop < 0 ? 'red' : 'green') + '">' + x.drop.toFixed(2) + '</td>' +
+        '<td class="' + (x.rise >= 0 ? 'green' : 'red') + '">' + x.rise.toFixed(2) + '</td>' +
+        '<td class="' + mc + '">' + mv + '</td></tr>';
+    }
+    tb.innerHTML = html;
+  }
+  
+  btn.disabled = false;
+  btn.textContent = '刷新';
+  st.textContent = '完成';
+}
+
+async function load() {
+  var btn = document.querySelector('button');
+  var st = document.getElementById('st');
+  var tb = document.getElementById('tb');
+  
+  btn.disabled = true;
+  btn.textContent = '加载中';
+  st.textContent = '获取中...';
+  tb.innerHTML = '<tr><td colspan="9" class="load">加载中...</td></tr>';
+  
+  var results = [];
+  var errors = [];
+  var count = 0;
+  
+  for (var i = 0; i < INDICES.length; i++) {
+    (function(idx) {
+      setTimeout(async function() {
+        try {
+          var code = INDICES[idx].c;
+          var name = INDICES[idx].n;
+          var resp = await fetch('/api/kline?code=' + encodeURIComponent(code));
+          var text = await resp.text();
+          var data = JSON.parse(text);
+          
+          if (data && data.data && data.data.length > 0) {
+            var rows = data.data.map(function(x) {
+              return {d: x.date, c: x.close, h: x.high, l: x.low};
+            });
+            results.push(analyze(rows, name));
+          } else {
+            errors.push(name + ': ' + (data.error || '无数据'));
+          }
+        } catch (e) {
+          errors.push(INDICES[idx].n + ': ' + e.message);
+        }
+        
+        count++;
+        st.textContent = count + '/' + INDICES.length;
+        
+        if (count === INDICES.length) {
+          render(results, errors);
+        }
+      }, i * 1500);
+    })(i);
+  }
+}
+
 load();
 </script>
 </body>
@@ -80,7 +209,7 @@ def fetch_yahoo(code):
     if code in _cache and (now - _cache_time) < 300:
         return _cache[code]
     try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{code}?interval=1d&range=3mo"
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/" + code + "?interval=1d&range=3mo"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode('utf-8'))
@@ -90,16 +219,18 @@ def fetch_yahoo(code):
         q = result[0]['indicators']['quote'][0]
         rows = []
         for i, t in enumerate(ts):
-            rows.append({'date': datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d'),
-                         'close': round(float(q['close'][i]), 2),
-                         'high': round(float(q['high'][i]), 2),
-                         'low': round(float(q['low'][i]), 2)})
+            rows.append({
+                'date': datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d'),
+                'close': round(float(q['close'][i]), 2),
+                'high': round(float(q['high'][i]), 2),
+                'low': round(float(q['low'][i]), 2)
+            })
         rows = [r for r in rows if r['close'] and r['close'] > 0]
         _cache[code] = rows
         _cache_time = now
         return rows
     except Exception as e:
-        print(f"Error {code}: {e}", flush=True)
+        print("Error " + code + ": " + str(e), flush=True)
         return None
 
 class Handler(BaseHTTPRequestHandler):
@@ -110,7 +241,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(HTML.encode("utf-8"))
         elif self.path.startswith("/api/kline"):
-            code = self.path.split("code=")[1].split("&")[0] if "code=" in self.path else ""
+            parts = self.path.split("code=")
+            code = parts[1].split("&")[0] if len(parts) > 1 else ""
             rows = fetch_yahoo(code) if code else None
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -123,30 +255,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
-        elif self.path.startswith("/api/debug"):
-            # 调试端点 - 测试Yahoo API
-            code = self.path.split("code=")[1].split("&")[0] if "code=" in self.path else "000001.SS"
-            try:
-                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{code}?interval=1d&range=3mo"
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    raw = resp.read().decode('utf-8')
-                result = json.loads(raw).get('chart', {}).get('result')
-                if result and result[0]:
-                    ts = result[0].get('timestamp', [])
-                    debug = {"status": "ok", "code": code, "records": len(ts)}
-                else:
-                    debug = {"status": "no_data", "code": code}
-            except Exception as e:
-                debug = {"status": "error", "code": code, "msg": str(e)}
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(debug).encode("utf-8"))
         else:
             self.send_error(404)
     def log_message(self, format, *args): pass
 
 if __name__ == "__main__":
-    print(f"Start on {PORT}", flush=True)
+    print("Start on " + str(PORT), flush=True)
     HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
