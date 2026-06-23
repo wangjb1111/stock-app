@@ -7,6 +7,17 @@ import urllib.request
 
 PORT = int(__import__("os").environ.get("PORT", 8000))
 
+INDICES = [
+    ("上证指数", "000001.SS"),
+    ("深证成指", "399001.SZ"),
+    ("创业板指", "399006.SZ"),
+    ("沪深300", "000300.SS"),
+    ("中证1000", "000852.SS"),
+    ("中证500", "000905.SS"),
+    ("上证50", "000016.SS"),
+    ("科创50", "000688.SS"),
+]
+
 HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -41,75 +52,22 @@ td{font-size:11px;padding:8px 6px;text-align:center;border-bottom:1px solid #f0f
 </tr></thead><tbody id="tb"><tr><td colspan="9" class="load">加载中...</td></tr></tbody></table>
 </div>
 <script>
-var INDICES=[
-  {n:'上证指数',c:'000001.SS'},
-  {n:'深证成指',c:'399001.SZ'},
-  {n:'创业板指',c:'399006.SZ'},
-  {n:'沪深300',c:'000300.SS'},
-  {n:'中证1000',c:'000852.SS'},
-  {n:'中证500',c:'000905.SS'},
-  {n:'上证50',c:'000016.SS'},
-  {n:'科创50',c:'000688.SS'}
-];
+var HTML_ENCODED = "__PLACEHOLDER__";
 
-function ema(arr, n) {
-  if (arr.length < n) return null;
-  var k = 2 / (n + 1);
-  var e = arr.slice(0, n).reduce(function(a, b) { return a + b; }, 0) / n;
-  for (var i = n; i < arr.length; i++) e = arr[i] * k + e * (1 - k);
-  return e;
-}
-
-function ml(rows) {
-  if (rows.length < 34) return null;
-  var cp = rows.map(function(r) { return r.c; });
-  var hp = rows.map(function(r) { return r.h; });
-  var lp = rows.map(function(r) { return r.l; });
-  var s = [];
-  for (var i = 0; i < rows.length; i++) {
-    var st = Math.max(0, i - 33);
-    var h34 = Math.max.apply(null, hp.slice(st, i + 1));
-    var l34 = Math.min.apply(null, lp.slice(st, i + 1));
-    s.push(h34 === l34 ? 0 : -100 * (h34 - cp[i]) / (h34 - l34));
-  }
-  var e = ema(s, 4);
-  return e !== null ? Math.round((e + 100) * 100) / 100 : null;
-}
-
-function analyze(rows, name) {
-  if (!rows || rows.length < 30) return {n: name, er: '数据不足'};
-  var last30 = rows.slice(-30);
-  var hm = Math.max.apply(null, last30.map(function(r) { return r.h; }));
-  var lm = Math.min.apply(null, last30.map(function(r) { return r.l; }));
-  var c = rows[rows.length - 1].c;
-  var highDate = last30.reduce(function(p, x) { return x.h > p.h ? x : p; }).d;
-  var lowDate = last30.reduce(function(p, x) { return x.l < p.l ? x : p; }).d;
-  return {
-    n: name,
-    current: Math.round(c * 100) / 100,
-    highMax: Math.round(hm * 100) / 100,
-    highDate: highDate,
-    lowMin: Math.round(lm * 100) / 100,
-    lowDate: lowDate,
-    drop: Math.round((lm - hm) / hm * 10000) / 100,
-    rise: Math.round((c - lm) / lm * 10000) / 100,
-    ml: ml(rows)
-  };
-}
-
-function render(results, errors) {
+function render(data) {
   var tb = document.getElementById('tb');
   var st = document.getElementById('st');
   var btn = document.querySelector('button');
   
-  if (results.length === 0) {
-    tb.innerHTML = '<tr><td colspan="9" class="load" style="color:#e74c3c">失败: ' + errors.join('; ') + '</td></tr>';
+  if (!data || !data.results || data.results.length === 0) {
+    tb.innerHTML = '<tr><td colspan="9" class="load" style="color:#e74c3c">失败: ' + (data && data.errors ? data.errors.join('; ') : '未知') + '</td></tr>';
   } else {
     var html = '';
-    for (var i = 0; i < results.length; i++) {
-      var x = results[i];
-      var mv = x.ml !== null ? x.ml.toFixed(2) : '-';
-      var mc = x.ml !== null ? (x.ml > 70 ? 'green' : x.ml < 30 ? 'red' : 'orange') : '';
+    var items = data.results;
+    for (var i = 0; i < items.length; i++) {
+      var x = items[i];
+      var mv = x.ml !== null && x.ml !== undefined ? x.ml.toFixed(2) : '-';
+      var mc = x.ml !== null && x.ml !== undefined ? (x.ml > 70 ? 'green' : x.ml < 30 ? 'red' : 'orange') : '';
       html += '<tr><td class="name">' + x.n + '</td>' +
         '<td>' + x.current.toFixed(2) + '</td>' +
         '<td>' + x.highMax.toFixed(2) + '</td>' +
@@ -125,7 +83,7 @@ function render(results, errors) {
   
   btn.disabled = false;
   btn.textContent = '刷新';
-  st.textContent = '完成';
+  st.textContent = '完成 (' + new Date().toLocaleString('zh-CN') + ')';
 }
 
 async function load() {
@@ -138,40 +96,15 @@ async function load() {
   st.textContent = '获取中...';
   tb.innerHTML = '<tr><td colspan="9" class="load">加载中...</td></tr>';
   
-  var results = [];
-  var errors = [];
-  var count = 0;
-  
-  for (var i = 0; i < INDICES.length; i++) {
-    (function(idx) {
-      setTimeout(async function() {
-        try {
-          var code = INDICES[idx].c;
-          var name = INDICES[idx].n;
-          var resp = await fetch('/api/kline?code=' + encodeURIComponent(code));
-          var text = await resp.text();
-          var data = JSON.parse(text);
-          
-          if (data && data.data && data.data.length > 0) {
-            var rows = data.data.map(function(x) {
-              return {d: x.date, c: x.close, h: x.high, l: x.low};
-            });
-            results.push(analyze(rows, name));
-          } else {
-            errors.push(name + ': ' + (data.error || '无数据'));
-          }
-        } catch (e) {
-          errors.push(INDICES[idx].n + ': ' + e.message);
-        }
-        
-        count++;
-        st.textContent = count + '/' + INDICES.length;
-        
-        if (count === INDICES.length) {
-          render(results, errors);
-        }
-      }, i * 1500);
-    })(i);
+  try {
+    var resp = await fetch('/api/all');
+    var data = await resp.json();
+    render(data);
+  } catch (e) {
+    tb.innerHTML = '<tr><td colspan="9" class="load" style="color:#e74c3c">请求失败: ' + e.message + '</td></tr>';
+    btn.disabled = false;
+    btn.textContent = '刷新';
+    st.textContent = '失败';
   }
 }
 
@@ -214,18 +147,27 @@ def fetch_yahoo(code):
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode('utf-8'))
         result = data.get('chart', {}).get('result')
-        if not result or not result[0]: return None
+        if not result or not result[0]:
+            print("No result for " + code, flush=True)
+            return None
         ts = result[0]['timestamp']
         q = result[0]['indicators']['quote'][0]
         rows = []
         for i, t in enumerate(ts):
-            rows.append({
-                'date': datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d'),
-                'close': round(float(q['close'][i]), 2),
-                'high': round(float(q['high'][i]), 2),
-                'low': round(float(q['low'][i]), 2)
-            })
-        rows = [r for r in rows if r['close'] and r['close'] > 0]
+            try:
+                close = float(q['close'][i])
+                high = float(q['high'][i])
+                low = float(q['low'][i])
+                if close > 0 and high > 0 and low > 0:
+                    rows.append({
+                        'date': datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d'),
+                        'close': round(close, 2),
+                        'high': round(high, 2),
+                        'low': round(low, 2)
+                    })
+            except (TypeError, ValueError):
+                continue
+        print(code + ": " + str(len(rows)) + " rows", flush=True)
         _cache[code] = rows
         _cache_time = now
         return rows
@@ -233,23 +175,62 @@ def fetch_yahoo(code):
         print("Error " + code + ": " + str(e), flush=True)
         return None
 
+def analyze(rows, name):
+    if not rows or len(rows) < 30:
+        return None
+    last30 = rows[-30:]
+    hm = max(r['high'] for r in last30)
+    lm = min(r['low'] for r in last30)
+    c = rows[-1]['close']
+    highDate = max(last30, key=lambda r: r['high'])['date']
+    lowDate = min(last30, key=lambda r: r['low'])['date']
+    closes = [r['close'] for r in rows]
+    highs = [r['high'] for r in rows]
+    lows = [r['low'] for r in rows]
+    ml_val = medium_line(closes, highs, lows)
+    return {
+        'n': name,
+        'current': round(c, 2),
+        'highMax': round(hm, 2),
+        'highDate': highDate,
+        'lowMin': round(lm, 2),
+        'lowDate': lowDate,
+        'drop': round((lm - hm) / hm * 100, 2),
+        'rise': round((c - lm) / lm * 100, 2),
+        'ml': ml_val
+    }
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path in("/", "/index.html"):
+        if self.path in ("/", "/index.html"):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(HTML.encode("utf-8"))
-        elif self.path.startswith("/api/kline"):
-            parts = self.path.split("code=")
-            code = parts[1].split("&")[0] if len(parts) > 1 else ""
-            rows = fetch_yahoo(code) if code else None
+        elif self.path == "/api/all":
+            results = []
+            errors = []
+            for name, code in INDICES:
+                try:
+                    rows = fetch_yahoo(code)
+                    if rows:
+                        a = analyze(rows, name)
+                        if a:
+                            results.append(a)
+                        else:
+                            errors.append(name + ': 分析失败')
+                    else:
+                        errors.append(name + ': 无数据')
+                except Exception as e:
+                    errors.append(name + ': ' + str(e))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            resp = {"code": 0 if rows else 1, "data": rows, "error": None if rows else "获取失败"}
-            self.wfile.write(json.dumps(resp).encode("utf-8"))
+            resp = {"results": results, "errors": errors}
+            self.wfile.write(json.dumps(resp, ensure_ascii=False).encode("utf-8"))
         elif self.path == "/api/test":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
