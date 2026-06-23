@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Render.com 部署 - 使用 akshare 获取中国指数数据
+Render.com 部署 - 直接使用东方财富API获取中国指数数据
 """
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import time
 import datetime
+import urllib.request
+import urllib.error
 
 PORT = int(__import__("os").environ.get("PORT", 8000))
 
@@ -47,8 +49,8 @@ _cache = {}
 _cache_time = 0
 CACHE_DURATION = 300
 
-def fetch_akshare(code):
-    """使用 akshare 获取数据"""
+def fetch_from_eastmoney(code):
+    """直接使用东方财富API获取指数数据"""
     global _cache, _cache_time
     
     now = time.time()
@@ -56,34 +58,32 @@ def fetch_akshare(code):
         return _cache[code]
     
     try:
-        import akshare as ak
+        # 东方财富API - 日K线数据
+        url = f"http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.{code}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=120"
         
-        # 获取日线数据
-        df = ak.stock_zh_index_daily(symbol=code)
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'http://quote.eastmoney.com/'
+        })
         
-        if df is None or df.empty:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        
+        if data.get('data') is None or data['data'].get('klines') is None:
             _cache[code] = None
             _cache_time = now
             return None
         
-        # 获取最近120个交易日
-        df = df.tail(120)
-        
+        klines = data['data']['klines']
         rows = []
-        for _, row in df.iterrows():
-            date = row['date']
-            if isinstance(date, str):
-                date_str = date[:10]
-            elif hasattr(date, 'strftime'):
-                date_str = date.strftime('%Y-%m-%d')
-            else:
-                date_str = str(date)
-            
+        for kline in klines:
+            parts = kline.split(',')
+            # parts: [日期, 开, 收, 高, 低, 成交量, ...]
             rows.append({
-                "date": date_str,
-                "close": round(float(row['close']), 2),
-                "high": round(float(row['high']), 2),
-                "low": round(float(row['low']), 2),
+                "date": parts[0],
+                "close": round(float(parts[2]), 2),
+                "high": round(float(parts[3]), 2),
+                "low": round(float(parts[4]), 2),
             })
         
         _cache[code] = rows
@@ -177,7 +177,7 @@ tr:nth-child(odd) td{background:#fafafa}
 </table>
 </div>
 <div id="eb" style="display:none"></div>
-<div class="footer">数据来源: 东方财富 (akshare)<br>建议横屏查看 &middot; 数据仅供参考</div>
+<div class="footer">数据来源: 东方财富建议横屏查看 &middot; 数据仅供参考</div>
 <script>
 const INDICES=[{name:'上证指数',code:'000001'},{name:'深证成指',code:'399001'},{name:'创业板指',code:'399006'},{name:'沪深300',code:'000300'},{name:'中证1000',code:'000852'},{name:'中证500',code:'000905'},{name:'上证50',code:'000016'},{name:'科创50',code:'000688'}];
 function ema(a,n){if(a.length<n)return null;let k=2/(n+1),e=a.slice(0,n).reduce((x,y)=>x+y,0)/n;for(let i=n;i<a.length;i++)e=a[i]*k+e*(1-k);return e}
