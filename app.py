@@ -8,14 +8,14 @@ import urllib.request
 PORT = int(__import__("os").environ.get("PORT", 8000))
 
 INDICES = [
-    ("上证指数", "000001.SS"),
-    ("深证成指", "399001.SZ"),
-    ("创业板指", "399006.SZ"),
-    ("沪深300", "000300.SS"),
-    ("中证1000", "000852.SS"),
-    ("中证500", "000905.SS"),
-    ("上证50", "000016.SS"),
-    ("科创50", "000688.SS"),
+    ("上证指数", ["000001.SS"]),
+    ("深证成指", ["399001.SZ"]),
+    ("创业板指", ["399006.SZ", "399102.SZ", "159915.SZ"]),
+    ("沪深300", ["000300.SS"]),
+    ("中证1000", ["000852.SS", "512100.SS", "159845.SZ"]),
+    ("中证500", ["000905.SS", "510500.SS", "159922.SZ"]),
+    ("上证50", ["000016.SS", "510050.SS"]),
+    ("科创50", ["000688.SS", "588000.SS", "588080.SS"]),
 ]
 
 HTML = """<!DOCTYPE html>
@@ -51,6 +51,7 @@ td{font-size:11px;padding:8px 6px;text-align:center;border-bottom:1px solid #f0f
 <th>趋势顶底中期线</th>
 </tr></thead><tbody id="tb"><tr><td colspan="9" class="load">加载中...</td></tr></tbody></table>
 </div>
+<div id="eb" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 12px;margin:10px;font-size:11px;color:#856404"></div>
 <script>
 var HTML_ENCODED = "__PLACEHOLDER__";
 
@@ -58,12 +59,13 @@ function render(data) {
   var tb = document.getElementById('tb');
   var st = document.getElementById('st');
   var btn = document.querySelector('button');
+  var eb = document.getElementById('eb');
   
-  if (!data || !data.results || data.results.length === 0) {
-    tb.innerHTML = '<tr><td colspan="9" class="load" style="color:#e74c3c">失败: ' + (data && data.errors ? data.errors.join('; ') : '未知') + '</td></tr>';
+  if (!data || (!data.results && !data.errors)) {
+    tb.innerHTML = '<tr><td colspan="9" class="load" style="color:#e74c3c">数据异常</td></tr>';
   } else {
     var html = '';
-    var items = data.results;
+    var items = data.results || [];
     for (var i = 0; i < items.length; i++) {
       var x = items[i];
       var mv = x.ml !== null && x.ml !== undefined ? x.ml.toFixed(2) : '-';
@@ -78,7 +80,18 @@ function render(data) {
         '<td class="' + (x.rise >= 0 ? 'green' : 'red') + '">' + x.rise.toFixed(2) + '</td>' +
         '<td class="' + mc + '">' + mv + '</td></tr>';
     }
-    tb.innerHTML = html;
+    if (html === '') {
+      tb.innerHTML = '<tr><td colspan="9" class="load" style="color:#e74c3c">全部失败</td></tr>';
+    } else {
+      tb.innerHTML = html;
+    }
+  }
+  
+  if (data && data.errors && data.errors.length > 0) {
+    eb.style.display = 'block';
+    eb.textContent = '失败: ' + data.errors.join(' | ');
+  } else {
+    eb.style.display = 'none';
   }
   
   btn.disabled = false;
@@ -135,12 +148,15 @@ def medium_line(closes, highs, lows):
 
 _cache = {}
 _cache_time = 0
+_error_cache = {}
 
-def fetch_yahoo(code):
-    global _cache, _cache_time
+def fetch_yahoo(code, name):
+    global _cache, _cache_time, _error_cache
     now = time.time()
     if code in _cache and (now - _cache_time) < 300:
-        return _cache[code]
+        return _cache[code], None
+    if code in _error_cache and (now - _error_cache[code][1]) < 300:
+        return None, _error_cache[code][0]
     try:
         url = "https://query1.finance.yahoo.com/v8/finance/chart/" + code + "?interval=1d&range=3mo"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -148,8 +164,9 @@ def fetch_yahoo(code):
             data = json.loads(resp.read().decode('utf-8'))
         result = data.get('chart', {}).get('result')
         if not result or not result[0]:
-            print("No result for " + code, flush=True)
-            return None
+            err = name + ": Yahoo无此指数数据 (" + code + ")"
+            _error_cache[code] = (err, now)
+            return None, err
         ts = result[0]['timestamp']
         q = result[0]['indicators']['quote'][0]
         rows = []
@@ -170,10 +187,12 @@ def fetch_yahoo(code):
         print(code + ": " + str(len(rows)) + " rows", flush=True)
         _cache[code] = rows
         _cache_time = now
-        return rows
+        return rows, None
     except Exception as e:
+        err = name + ": " + str(e)
+        _error_cache[code] = (err, now)
         print("Error " + code + ": " + str(e), flush=True)
-        return None
+        return None, err
 
 def analyze(rows, name):
     if not rows or len(rows) < 30:
@@ -211,19 +230,27 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/all":
             results = []
             errors = []
-            for name, code in INDICES:
-                try:
-                    rows = fetch_yahoo(code)
-                    if rows:
-                        a = analyze(rows, name)
-                        if a:
-                            results.append(a)
+            for name, codes in INDICES:
+                rows = None
+                err = None
+                for code in codes:
+                    try:
+                        r, e = fetch_yahoo(code, name)
+                        if r and len(r) >= 30:
+                            rows = r
+                            break
                         else:
-                            errors.append(name + ': 分析失败')
+                            err = e if e else (name + ': ' + code + '数据不足')
+                    except Exception as ex:
+                        err = name + ': ' + str(ex)
+                if rows:
+                    a = analyze(rows, name)
+                    if a:
+                        results.append(a)
                     else:
-                        errors.append(name + ': 无数据')
-                except Exception as e:
-                    errors.append(name + ': ' + str(e))
+                        errors.append(name + ': 分析失败')
+                else:
+                    errors.append(err if err else name + ': 无可用数据')
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
