@@ -48,8 +48,8 @@ td{font-size:11px;padding:8px 6px;text-align:center;border-bottom:1px solid #f0f
 <table><thead><tr>
 <th>指数</th><th>当前点位</th><th>30日最高</th><th>最高日期</th>
 <th>30日最低</th><th>最低日期</th><th>最低相对最高跌幅%</th><th>当前相对最低涨幅%</th>
-<th>趋势顶底中期线</th><th>5分钟中期线</th>
-</tr></thead><tbody id="tb"><tr><td colspan="10" class="load">加载中...</td></tr></tbody></table>
+<th>趋势顶底中期线</th><th>5分钟中期线</th><th>高量柱</th>
+</tr></thead><tbody id="tb"><tr><td colspan="11" class="load">加载中...</td></tr></tbody></table>
 </div>
 <div id="eb" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 12px;margin:10px;font-size:11px;color:#856404"></div>
 <script>
@@ -60,7 +60,7 @@ function render(data) {
   var eb = document.getElementById('eb');
   
   if (!data || (!data.results && !data.errors)) {
-    tb.innerHTML = '<tr><td colspan="10" class="load" style="color:#e74c3c">数据异常</td></tr>';
+    tb.innerHTML = '<tr><td colspan="11" class="load" style="color:#e74c3c">数据异常</td></tr>';
   } else {
     var html = '';
     var items = data.results || [];
@@ -70,6 +70,8 @@ function render(data) {
       var mc = x.ml !== null && x.ml !== undefined ? (x.ml > 70 ? 'green' : x.ml < 30 ? 'red' : 'orange') : '';
       var mv5 = x.ml5m !== null && x.ml5m !== undefined ? x.ml5m.toFixed(2) : '-';
       var mc5 = x.ml5m !== null && x.ml5m !== undefined ? (x.ml5m > 70 ? 'green' : x.ml5m < 30 ? 'red' : 'orange') : '';
+      var hvText = x.hv ? 'True' : 'False';
+      var hvClass = x.hv ? 'red' : '';
       html += '<tr><td class="name">' + x.n + '</td>' +
         '<td>' + x.current.toFixed(2) + '</td>' +
         '<td>' + x.highMax.toFixed(2) + '</td>' +
@@ -79,10 +81,11 @@ function render(data) {
         '<td class="' + (x.drop < 0 ? 'red' : 'green') + '">' + x.drop.toFixed(2) + '</td>' +
         '<td class="' + (x.rise >= 0 ? 'green' : 'red') + '">' + x.rise.toFixed(2) + '</td>' +
         '<td class="' + mc + '">' + mv + '</td>' +
-        '<td class="' + mc5 + '">' + mv5 + '</td></tr>';
+        '<td class="' + mc5 + '">' + mv5 + '</td>' +
+        '<td class="' + hvClass + '">' + hvText + '</td></tr>';
     }
     if (html === '') {
-      tb.innerHTML = '<tr><td colspan="10" class="load" style="color:#e74c3c">全部失败</td></tr>';
+      tb.innerHTML = '<tr><td colspan="11" class="load" style="color:#e74c3c">全部失败</td></tr>';
     } else {
       tb.innerHTML = html;
     }
@@ -108,14 +111,14 @@ async function load() {
   btn.disabled = true;
   btn.textContent = '加载中';
   st.textContent = '获取中...';
-  tb.innerHTML = '<tr><td colspan="10" class="load">加载中...</td></tr>';
+  tb.innerHTML = '<tr><td colspan="11" class="load">加载中...</td></tr>';
   
   try {
     var resp = await fetch('/api/all');
     var data = await resp.json();
     render(data);
   } catch (e) {
-    tb.innerHTML = '<tr><td colspan="10" class="load" style="color:#e74c3c">请求失败: ' + e.message + '</td></tr>';
+    tb.innerHTML = '<tr><td colspan="11" class="load" style="color:#e74c3c">请求失败: ' + e.message + '</td></tr>';
     btn.disabled = false;
     btn.textContent = '刷新';
     st.textContent = '失败';
@@ -183,12 +186,14 @@ def fetch_yahoo(code, name, interval='1d', rng='3mo'):
                 close = float(q['close'][i])
                 high = float(q['high'][i])
                 low = float(q['low'][i])
+                vol = float(q['volume'][i]) if 'volume' in q and q['volume'][i] is not None else 0
                 if close > 0 and high > 0 and low > 0:
                     rows.append({
                         'date': datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d'),
                         'close': round(close, 2),
                         'high': round(high, 2),
-                        'low': round(low, 2)
+                        'low': round(low, 2),
+                        'volume': int(vol)
                     })
             except (TypeError, ValueError):
                 continue
@@ -200,6 +205,21 @@ def fetch_yahoo(code, name, interval='1d', rng='3mo'):
         _error_cache[code] = (err, now)
         print("Error " + code + " " + interval + ": " + str(e), flush=True)
         return None, err
+
+def check_high_volume(rows):
+    if not rows or len(rows) < 5:
+        return False
+    last3 = rows[-3:]
+    for i in range(len(last3)):
+        idx = len(rows) - 3 + i
+        if idx < 3:
+            continue
+        vol = last3[i]['volume']
+        prev3 = [rows[idx - j]['volume'] for j in range(1, 4)]
+        if all(vol > pv for pv in prev3):
+            if last3[i]['close'] > rows[idx - 1]['close']:
+                return True
+    return False
 
 def analyze(rows, name, rows_5m=None):
     if not rows or len(rows) < 30:
@@ -222,6 +242,8 @@ def analyze(rows, name, rows_5m=None):
         l5 = [r['low'] for r in rows_5m]
         ml_5m = medium_line(c5, h5, l5)
     
+    hv = check_high_volume(rows)
+    
     return {
         'n': name,
         'current': round(c, 2),
@@ -232,7 +254,8 @@ def analyze(rows, name, rows_5m=None):
         'drop': round((lm - hm) / hm * 100, 2),
         'rise': round((c - lm) / lm * 100, 2),
         'ml': ml_val,
-        'ml5m': ml_5m
+        'ml5m': ml_5m,
+        'hv': hv
     }
 
 class Handler(BaseHTTPRequestHandler):
