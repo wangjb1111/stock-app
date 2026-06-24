@@ -8,14 +8,14 @@ import urllib.request
 PORT = int(__import__("os").environ.get("PORT", 8000))
 
 INDICES = [
-    ("上证指数", ["1.000001", "000001.SS"]),
-    ("深证成指", ["0.399001", "399001.SZ"]),
-    ("创业板指", ["0.399006", "399006.SZ"]),
-    ("沪深300", ["1.000300", "000300.SS"]),
-    ("中证1000", ["1.000852", "000852.SS"]),
-    ("中证500", ["1.000905", "000905.SS"]),
-    ("上证50", ["1.000016", "000016.SS"]),
-    ("科创50", ["1.000688", "000688.SS"]),
+    ("上证指数", ["000001.SS"]),
+    ("深证成指", ["399001.SZ"]),
+    ("创业板指", ["399006.SZ"]),
+    ("沪深300", ["000300.SS"]),
+    ("中证1000", ["512100.SS"]),
+    ("中证500", ["510500.SS"]),
+    ("上证50", ["510050.SS"]),
+    ("科创50", ["588000.SS"]),
 ]
 
 HTML = """<!DOCTYPE html>
@@ -53,8 +53,6 @@ td{font-size:11px;padding:8px 6px;text-align:center;border-bottom:1px solid #f0f
 </div>
 <div id="eb" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 12px;margin:10px;font-size:11px;color:#856404"></div>
 <script>
-var HTML_ENCODED = "__PLACEHOLDER__";
-
 function render(data) {
   var tb = document.getElementById('tb');
   var st = document.getElementById('st');
@@ -110,14 +108,14 @@ async function load() {
   btn.disabled = true;
   btn.textContent = '加载中';
   st.textContent = '获取中...';
-  tb.innerHTML = '<tr><td colspan="9" class="load">加载中...</td></tr>';
+  tb.innerHTML = '<tr><td colspan="10" class="load">加载中...</td></tr>';
   
   try {
     var resp = await fetch('/api/all');
     var data = await resp.json();
     render(data);
   } catch (e) {
-    tb.innerHTML = '<tr><td colspan="9" class="load" style="color:#e74c3c">请求失败: ' + e.message + '</td></tr>';
+    tb.innerHTML = '<tr><td colspan="10" class="load" style="color:#e74c3c">请求失败: ' + e.message + '</td></tr>';
     btn.disabled = false;
     btn.textContent = '刷新';
     st.textContent = '失败';
@@ -151,98 +149,22 @@ def medium_line(closes, highs, lows):
 
 _cache = {}
 _cache_time = 0
-_error_cache = {}
 _cache_5m = {}
 _cache_5m_time = 0
-_cache_em = {}
-_cache_em_time = 0
-
-def fetch_eastmoney(secid, name):
-    """东方财富获取指数日K线"""
-    global _cache, _cache_time, _error_cache
-    now = time.time()
-    cache_key = 'em_' + secid
-    if cache_key in _cache and (now - _cache_time) < 300:
-        return _cache[cache_key], None
-    if secid in _error_cache and (now - _error_cache[secid][1]) < 300:
-        return None, _error_cache[secid][0]
-    try:
-        url = "http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=" + secid + "&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55&klt=101&fqt=1&end=20260623&lmt=120"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-        klines = data.get('data', {}).get('klines', [])
-        if not klines:
-            return None, name + ": 东方财富无数据"
-        rows = []
-        for line in klines:
-            parts = line.split(',')
-            if len(parts) >= 6:
-                rows.append({
-                    'date': parts[0],
-                    'open': float(parts[1]),
-                    'close': float(parts[2]),
-                    'high': float(parts[3]),
-                    'low': float(parts[4]),
-                    'volume': int(parts[5])
-                })
-        print("EM " + secid + ": " + str(len(rows)) + " rows", flush=True)
-        _cache[cache_key] = rows
-        _cache_time = now
-        return rows, None
-    except Exception as e:
-        err = name + ": " + str(e)
-        _error_cache[secid] = (err, now)
-        print("EM Error " + secid + ": " + str(e), flush=True)
-        return None, err
-
-def fetch_eastmoney_5m(secid, name):
-    """东方财富获取5分钟K线"""
-    global _cache_5m, _cache_5m_time, _error_cache
-    now = time.time()
-    cache_key = 'em5_' + secid
-    if cache_key in _cache_5m and (now - _cache_5m_time) < 120:
-        return _cache_5m[cache_key], None
-    try:
-        url = "http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=" + secid + "&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55&klt=15&fqt=1&end=20260623&lmt=300"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-        klines = data.get('data', {}).get('klines', [])
-        if not klines:
-            return None
-        rows = []
-        for line in klines:
-            parts = line.split(',')
-            if len(parts) >= 6:
-                rows.append({
-                    'date': parts[0],
-                    'open': float(parts[1]),
-                    'close': float(parts[2]),
-                    'high': float(parts[3]),
-                    'low': float(parts[4]),
-                    'volume': int(parts[5])
-                })
-        print("EM5 " + secid + ": " + str(len(rows)) + " rows", flush=True)
-        _cache_5m[cache_key] = rows
-        _cache_5m_time = now
-        return rows, None
-    except Exception as e:
-        print("EM5 Error " + secid + ": " + str(e), flush=True)
-        return None, None
+_error_cache = {}
 
 def fetch_yahoo(code, name, interval='1d', rng='3mo'):
-    global _cache, _cache_time, _error_cache, _cache_5m, _cache_5m_time
+    global _cache, _cache_time, _cache_5m, _cache_5m_time, _error_cache
     now = time.time()
     
     cache = _cache_5m if interval == '5m' else _cache
-    cache_time = _cache_5m_time if interval == '5m' else _cache_time
     
     if code in cache and (now - cache[code][1]) < (120 if interval == '5m' else 300):
         return cache[code][0], None
     
-    if code in _error_cache and (now - _error_cache[code][1]) < 300:
+    if code in _error_cache and (now - _error_cache[code][1]) < 600:
         return None, _error_cache[code][0]
+    
     try:
         url = "https://query1.finance.yahoo.com/v8/finance/chart/" + code + "?interval=" + interval + "&range=" + rng
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -250,7 +172,7 @@ def fetch_yahoo(code, name, interval='1d', rng='3mo'):
             data = json.loads(resp.read().decode('utf-8'))
         result = data.get('chart', {}).get('result')
         if not result or not result[0]:
-            err = name + ": Yahoo无此指数数据 (" + code + ")"
+            err = name + ": Yahoo无数据 (" + code + ")"
             _error_cache[code] = (err, now)
             return None, err
         ts = result[0]['timestamp']
@@ -263,7 +185,7 @@ def fetch_yahoo(code, name, interval='1d', rng='3mo'):
                 low = float(q['low'][i])
                 if close > 0 and high > 0 and low > 0:
                     rows.append({
-                        'date': datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d %H:%M'),
+                        'date': datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d'),
                         'close': round(close, 2),
                         'high': round(high, 2),
                         'low': round(low, 2)
@@ -271,10 +193,7 @@ def fetch_yahoo(code, name, interval='1d', rng='3mo'):
             except (TypeError, ValueError):
                 continue
         print(code + " " + interval + ": " + str(len(rows)) + " rows", flush=True)
-        if interval == '5m':
-            _cache_5m[code] = (rows, now)
-        else:
-            _cache[code] = (rows, now)
+        cache[code] = (rows, now)
         return rows, None
     except Exception as e:
         err = name + ": " + str(e)
@@ -331,36 +250,19 @@ class Handler(BaseHTTPRequestHandler):
                 rows = None
                 rows_5m = None
                 err = None
-                
-                # 先尝试东方财富代码（包含"."的格式）
-                em_code = None
-                yh_code = None
-                for c in codes:
-                    if '.' in c and not c.endswith('.SS') and not c.endswith('.SZ'):
-                        em_code = c
-                    else:
-                        yh_code = c
-                
-                # 东方财富日线
-                if em_code:
-                    r, e = fetch_eastmoney(em_code, name)
-                    if r and len(r) >= 30:
-                        rows = r
-                        r5, e5 = fetch_eastmoney_5m(em_code, name)
-                        if r5 and len(r5) >= 34:
-                            rows_5m = r5
-                
-                # 如果东方财富失败，尝试Yahoo
-                if not rows and yh_code:
-                    r, e = fetch_yahoo(yh_code, name, '1d', '3mo')
-                    if r and len(r) >= 30:
-                        rows = r
-                        r5, e5 = fetch_yahoo(yh_code, name, '5m', '5d')
-                        if r5 and len(r5) >= 34:
-                            rows_5m = r5
-                    elif e:
-                        err = e
-                
+                for code in codes:
+                    try:
+                        r, e = fetch_yahoo(code, name, '1d', '3mo')
+                        if r and len(r) >= 30:
+                            rows = r
+                            r5, e5 = fetch_yahoo(code, name, '5m', '5d')
+                            if r5 and len(r5) >= 34:
+                                rows_5m = r5
+                            break
+                        else:
+                            err = e if e else (name + ': 数据不足')
+                    except Exception as ex:
+                        err = name + ': ' + str(ex)
                 if rows:
                     a = analyze(rows, name, rows_5m)
                     if a:
@@ -368,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         errors.append(name + ': 分析失败')
                 else:
-                    errors.append(err if err else name + ': 无可用数据')
+                    errors.append(err if err else name + ': 无数据')
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
