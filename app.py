@@ -8,14 +8,14 @@ import urllib.request
 PORT = int(__import__("os").environ.get("PORT", 8000))
 
 INDICES = [
-    ("上证指数", ["000001.SS"]),
-    ("深证成指", ["399001.SZ"]),
-    ("创业板指", ["399006.SZ", "399102.SZ", "159915.SZ"]),
-    ("沪深300", ["000300.SS"]),
-    ("中证1000", ["000852.SS", "512100.SS", "159845.SZ"]),
-    ("中证500", ["000905.SS", "510500.SS", "159922.SZ"]),
-    ("上证50", ["000016.SS", "510050.SS"]),
-    ("科创50", ["000688.SS", "588000.SS", "588080.SS"]),
+    ("上证指数", ["1.000001", "000001.SS"]),
+    ("深证成指", ["0.399001", "399001.SZ"]),
+    ("创业板指", ["0.399006", "399006.SZ"]),
+    ("沪深300", ["1.000300", "000300.SS"]),
+    ("中证1000", ["1.000852", "000852.SS"]),
+    ("中证500", ["1.000905", "000905.SS"]),
+    ("上证50", ["1.000016", "000016.SS"]),
+    ("科创50", ["1.000688", "000688.SS"]),
 ]
 
 HTML = """<!DOCTYPE html>
@@ -154,6 +154,82 @@ _cache_time = 0
 _error_cache = {}
 _cache_5m = {}
 _cache_5m_time = 0
+_cache_em = {}
+_cache_em_time = 0
+
+def fetch_eastmoney(secid, name):
+    """东方财富获取指数日K线"""
+    global _cache, _cache_time, _error_cache
+    now = time.time()
+    cache_key = 'em_' + secid
+    if cache_key in _cache and (now - _cache_time) < 300:
+        return _cache[cache_key], None
+    if secid in _error_cache and (now - _error_cache[secid][1]) < 300:
+        return None, _error_cache[secid][0]
+    try:
+        url = "http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=" + secid + "&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55&klt=101&fqt=1&end=20260623&lmt=120"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        klines = data.get('data', {}).get('klines', [])
+        if not klines:
+            return None, name + ": 东方财富无数据"
+        rows = []
+        for line in klines:
+            parts = line.split(',')
+            if len(parts) >= 6:
+                rows.append({
+                    'date': parts[0],
+                    'open': float(parts[1]),
+                    'close': float(parts[2]),
+                    'high': float(parts[3]),
+                    'low': float(parts[4]),
+                    'volume': int(parts[5])
+                })
+        print("EM " + secid + ": " + str(len(rows)) + " rows", flush=True)
+        _cache[cache_key] = rows
+        _cache_time = now
+        return rows, None
+    except Exception as e:
+        err = name + ": " + str(e)
+        _error_cache[secid] = (err, now)
+        print("EM Error " + secid + ": " + str(e), flush=True)
+        return None, err
+
+def fetch_eastmoney_5m(secid, name):
+    """东方财富获取5分钟K线"""
+    global _cache_5m, _cache_5m_time, _error_cache
+    now = time.time()
+    cache_key = 'em5_' + secid
+    if cache_key in _cache_5m and (now - _cache_5m_time) < 120:
+        return _cache_5m[cache_key], None
+    try:
+        url = "http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=" + secid + "&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55&klt=15&fqt=1&end=20260623&lmt=300"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        klines = data.get('data', {}).get('klines', [])
+        if not klines:
+            return None
+        rows = []
+        for line in klines:
+            parts = line.split(',')
+            if len(parts) >= 6:
+                rows.append({
+                    'date': parts[0],
+                    'open': float(parts[1]),
+                    'close': float(parts[2]),
+                    'high': float(parts[3]),
+                    'low': float(parts[4]),
+                    'volume': int(parts[5])
+                })
+        print("EM5 " + secid + ": " + str(len(rows)) + " rows", flush=True)
+        _cache_5m[cache_key] = rows
+        _cache_5m_time = now
+        return rows, None
+    except Exception as e:
+        print("EM5 Error " + secid + ": " + str(e), flush=True)
+        return None, None
 
 def fetch_yahoo(code, name, interval='1d', rng='3mo'):
     global _cache, _cache_time, _error_cache, _cache_5m, _cache_5m_time
@@ -162,7 +238,6 @@ def fetch_yahoo(code, name, interval='1d', rng='3mo'):
     cache = _cache_5m if interval == '5m' else _cache
     cache_time = _cache_5m_time if interval == '5m' else _cache_time
     
-    cache_key = code + '_' + interval
     if code in cache and (now - cache[code][1]) < (120 if interval == '5m' else 300):
         return cache[code][0], None
     
@@ -256,19 +331,36 @@ class Handler(BaseHTTPRequestHandler):
                 rows = None
                 rows_5m = None
                 err = None
-                for code in codes:
-                    try:
-                        r, e = fetch_yahoo(code, name, '1d', '3mo')
-                        if r and len(r) >= 30:
-                            rows = r
-                            r5, e5 = fetch_yahoo(code, name, '5m', '5d')
-                            if r5 and len(r5) >= 34:
-                                rows_5m = r5
-                            break
-                        else:
-                            err = e if e else (name + ': ' + code + '数据不足')
-                    except Exception as ex:
-                        err = name + ': ' + str(ex)
+                
+                # 先尝试东方财富代码（包含"."的格式）
+                em_code = None
+                yh_code = None
+                for c in codes:
+                    if '.' in c and not c.endswith('.SS') and not c.endswith('.SZ'):
+                        em_code = c
+                    else:
+                        yh_code = c
+                
+                # 东方财富日线
+                if em_code:
+                    r, e = fetch_eastmoney(em_code, name)
+                    if r and len(r) >= 30:
+                        rows = r
+                        r5, e5 = fetch_eastmoney_5m(em_code, name)
+                        if r5 and len(r5) >= 34:
+                            rows_5m = r5
+                
+                # 如果东方财富失败，尝试Yahoo
+                if not rows and yh_code:
+                    r, e = fetch_yahoo(yh_code, name, '1d', '3mo')
+                    if r and len(r) >= 30:
+                        rows = r
+                        r5, e5 = fetch_yahoo(yh_code, name, '5m', '5d')
+                        if r5 and len(r5) >= 34:
+                            rows_5m = r5
+                    elif e:
+                        err = e
+                
                 if rows:
                     a = analyze(rows, name, rows_5m)
                     if a:
